@@ -1,0 +1,168 @@
+# FLASH-TV Configuration File
+# This file is the single source of truth for all FLASH-TV settings.
+# Values with ${VAR} syntax are substituted from environment variables.
+
+# =============================================================================
+# Identity Configuration
+# =============================================================================
+identity:
+  participant_id: "${PARTICIPANT_ID}"      # e.g., "P1-3999" or "ES-1234"
+  device_id: "${DEVICE_ID}"                # e.g., "028" (last 3 digits of username)
+  username: "${FLASH_USERNAME}"            # e.g., "flashsys028"
+
+  # Derived paths (computed from above)
+  full_id: "${PARTICIPANT_ID}${DEVICE_ID}" # e.g., "P1-3999028"
+
+# =============================================================================
+# Path Configuration
+# =============================================================================
+paths:
+  # Base directories
+  home: "/home/${FLASH_USERNAME}"
+  data_root: "/home/${FLASH_USERNAME}/data"
+  scripts_root: "/home/${FLASH_USERNAME}/flash-tv-scripts"
+
+  # Participant-specific directories
+  data_dir: "/home/${FLASH_USERNAME}/data/${PARTICIPANT_ID}${DEVICE_ID}_data"
+  faces_dir: "/home/${FLASH_USERNAME}/data/${PARTICIPANT_ID}${DEVICE_ID}_data/${PARTICIPANT_ID}${DEVICE_ID}_faces"
+  frames_dir: "/home/${FLASH_USERNAME}/data/${PARTICIPANT_ID}${DEVICE_ID}_data/${PARTICIPANT_ID}${DEVICE_ID}_frames"
+  logs_dir: "/home/${FLASH_USERNAME}/data/${PARTICIPANT_ID}${DEVICE_ID}_data/logs"
+
+  # Model paths
+  models:
+    gaze_r50: "/home/${FLASH_USERNAME}/gaze_models/model_v3_best_Gaze360ETHXrtGene_r50.pth.tar"
+    gaze_r50reg: "/home/${FLASH_USERNAME}/gaze_models/model_v3_best_Gaze360ETHXrtGene_r50reg.pth.tar"
+    adaface: "/home/${FLASH_USERNAME}/Desktop/FLASH_TV_v3/AdaFace/pretrained/adaface_ir101_webface12m.ckpt"
+    retinaface: "/home/${FLASH_USERNAME}/insightface/detection/RetinaFace"
+    yolo_face: "/home/${FLASH_USERNAME}/FLASH_TV/darknet_face_release"
+
+# =============================================================================
+# Camera Configuration
+# =============================================================================
+camera:
+  resolution:
+    width: 1920
+    height: 1080
+  fps: 30
+  codec: "MJPG"
+
+  # Preferred camera models in order of priority
+  preferred_models:
+    - "Logitech Webcam C930e"
+    - "Anker PowerConf C300"
+
+  # Detection settings
+  detector_resolution:
+    width: 608
+    height: 342
+
+# =============================================================================
+# Pipeline Configuration
+# =============================================================================
+pipeline:
+  # Number of identities to track (target child, siblings, parents)
+  num_identities: 4
+
+  # Standby mode: enter low-power mode if no face detected for this duration
+  standby_timeout_seconds: 1500  # 25 minutes
+
+  # Gallery update interval: refresh face embeddings periodically
+  gallery_update_interval_seconds: 150  # 2.5 minutes
+
+  # Queue settings
+  queue_max_size: 500
+  queue_empty_timeout_seconds: 45
+
+  # Batch processing
+  batch_size: 7
+  frames_to_analyze: 2  # Out of batch, analyze only these frames (for speed)
+
+  # Rotation detection for finding target child
+  rotate_to_find_tc: true
+
+  # Image saving
+  save_images: false  # Set to true for debugging, false for production
+
+# =============================================================================
+# Face Processing Configuration
+# =============================================================================
+face_processing:
+  # For verification
+  verification:
+    face_size: 112
+    crop_offset: 16
+    small_face_padding: 7
+    small_face_size: 65
+
+  # For gaze estimation
+  gaze:
+    face_size: 160
+    crop_offset: 45
+    small_face_padding: 3
+    small_face_size: 65
+
+# =============================================================================
+# Service Configuration
+# =============================================================================
+services:
+  # Periodic restart interval
+  restart_interval_hours: 6
+
+  # Boot delay before starting main service
+  boot_delay_seconds: 10
+
+  # Restart delay after crash
+  crash_restart_delay_seconds: 30
+
+  # Process monitoring interval
+  monitor_interval_seconds: 30
+
+# =============================================================================
+# Backup Configuration
+# =============================================================================
+backup:
+  # Borg backup settings
+  enabled: true
+
+  # Directories to backup
+  include:
+    - "/home/${FLASH_USERNAME}/data"
+    - "/home/${FLASH_USERNAME}/homeassistant-compose/config"
+
+  # Patterns to exclude
+  exclude:
+    - "*.zip"
+    - "*face*"  # Exclude face images for privacy
+
+  # USB detection
+  usb_vendor: "SanDisk Corp. Ultra Fit"
+
+# =============================================================================
+# Home Assistant Configuration
+# =============================================================================
+homeassistant:
+  # Container settings
+  container_name: "homeassistant"
+  image: "ghcr.io/home-assistant/home-assistant:stable"
+
+  # Smart plug settings
+  smart_plug:
+    entity_id: "switch.third_reality_inc_3rsp02028bz"
+    power_sensor: "sensor.third_reality_inc_3rsp02028bz_power"
+
+  # Data logging interval
+  power_log_interval_seconds: 5
+
+  # Keep plug on interval
+  plug_check_interval_seconds: 30
+
+# =============================================================================
+# Logging Configuration
+# =============================================================================
+logging:
+  # Log level: DEBUG, INFO, WARNING, ERROR
+  level: "INFO"
+
+  # Log file rotation
+  max_log_size_mb: 100
+  backup_count: 5

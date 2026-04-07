@@ -1,0 +1,654 @@
+"""Gallery creation step implementation using new framework patterns."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from config.messages import MESSAGES
+from core import WizardStep
+from core.exceptions import ErrorType, FlashTVError, handle_step_error
+from models import ProcessStatus, StepStatus
+from models.state_keys import UserInputKey
+from PySide6.QtWidgets import QProgressBar, QWidget
+from utils.ui_factory import ButtonStyle
+
+
+class GalleryCreationStep(WizardStep):
+    """Step 7: Face Gallery Creation using new framework patterns."""
+
+    def create_content_widget(self) -> QWidget:
+        """Create the gallery creation UI using UI factory."""
+        content = QWidget()
+
+        # Use UI factory for main layout
+        main_layout = self.ui_factory.create_main_step_layout()
+        content.setLayout(main_layout)
+
+        # Create sections in a two-column layout
+        content_row = self.ui_factory.create_horizontal_layout(spacing=12)
+
+        # Left column: Setup and shortcuts
+        left_column = self.ui_factory.create_vertical_layout(spacing=8)
+
+        setup_section = self._create_setup_section()
+        left_column.addWidget(setup_section)
+
+        shortcuts_section = self._create_shortcuts_section()
+        left_column.addWidget(shortcuts_section)
+
+        left_column.addStretch()  # Push content up
+
+        content_row.addLayout(left_column, 1)
+
+        # Right column: Status
+        right_column = self.ui_factory.create_vertical_layout(spacing=8)
+
+        status_section = self._create_status_section()
+        right_column.addWidget(status_section, 1)
+
+        content_row.addLayout(right_column, 1)
+
+        main_layout.addLayout(content_row, 1)
+
+        # Continue button using UI factory
+        continue_section = self._create_continue_section()
+        main_layout.addLayout(continue_section)
+
+        # Load existing gallery path if available
+        self._load_existing_gallery_path()
+
+        return content
+
+    def _create_setup_section(self) -> QWidget:
+        """Create the gallery setup section using UI factory."""
+        setup_group, setup_layout = self.ui_factory.create_group_box(
+            "Face Gallery Setup"
+        )
+
+        # Instructions
+        instructions = self.ui_factory.create_label(
+            "Manually create a face gallery with reference images for family members. "
+            "The gallery location is determined from your participant ID and data path."
+        )
+        setup_layout.addWidget(instructions)
+
+        # Gallery path display (read-only)
+        path_layout = self.ui_factory.create_horizontal_layout()
+
+        path_label = self.ui_factory.create_label("Gallery Location:")
+        path_label.setMinimumWidth(120)
+        path_layout.addWidget(path_label)
+
+        self.gallery_path_input = self.ui_factory.create_label(
+            "Will be auto-generated from participant info"
+        )
+        self.gallery_path_input.setStyleSheet(
+            "border: 1px solid #ccc; padding: 5px; background: #f5f5f5; color: #666;"
+        )
+        path_layout.addWidget(self.gallery_path_input, 1)
+
+        setup_layout.addLayout(path_layout)
+
+        return setup_group
+
+    def _create_status_section(self) -> QWidget:
+        """Create the combined status section for gallery creation and validation."""
+        status_group, status_layout = self.ui_factory.create_group_box(
+            "Gallery Creation and Validation"
+        )
+
+        # Create gallery button
+        self.create_gallery_button = self.ui_factory.create_action_button(
+            "🎥 Create Gallery from Camera Captures (Manual)",
+            callback=self._create_gallery,
+            style=ButtonStyle.PRIMARY,
+            height=40,
+        )
+        status_layout.addWidget(self.create_gallery_button)
+
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setVisible(False)
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("Initializing... %p%")
+        status_layout.addWidget(self.progress_bar)
+
+        # Combined status output
+        self.gallery_output = self.ui_factory.create_text_area(
+            placeholder="Click 'Create Gallery' to begin. Status will appear here...",
+            max_height=300,
+            read_only=True,
+        )
+        status_layout.addWidget(self.gallery_output)
+
+        return status_group
+
+    def _create_shortcuts_section(self) -> QWidget:
+        """Create the keyboard shortcuts reference section."""
+        shortcuts_group, shortcuts_layout = self.ui_factory.create_group_box(
+            "⌨️ Keyboard Shortcuts"
+        )
+
+        shortcuts_text = self.ui_factory.create_label(
+            "<table cellspacing='8'>"
+            "<tr><td>• <b>T</b> = Target child</td><td>• <b>1-5</b> = Capture face</td></tr>"
+            "<tr><td>• <b>S</b> = Sibling</td><td>• <b>R</b> = Refresh</td></tr>"
+            "<tr><td>• <b>P</b> = Parent</td><td>• <b>Q</b> = Quit</td></tr>"
+            "<tr><td>• <b>E</b> = Extra person</td><td></td></tr>"
+            "<tr><td>• <b>U</b> = Unselect</td><td></td></tr>"
+            "</table>"
+        )
+        shortcuts_layout.addWidget(shortcuts_text)
+
+        return shortcuts_group
+
+    def _create_continue_section(self):
+        """Create the continue button section using UI factory."""
+        button_layout, self.continue_button = self.ui_factory.create_continue_button(
+            callback=self._on_continue_clicked, text=MESSAGES.UI.CONTINUE
+        )
+
+        return button_layout
+
+    @handle_step_error
+    def _load_existing_gallery_path(self) -> None:
+        """Auto-generate and load gallery path from participant info with logging."""
+        try:
+            participant_id = self.state.get_user_input(UserInputKey.PARTICIPANT_ID, "")
+            device_id = self.state.get_user_input(UserInputKey.DEVICE_ID, "")
+            data_path = self.state.get_user_input(UserInputKey.DATA_PATH, "")
+
+            if participant_id and data_path:
+                # Include device_id in gallery path to match data path format
+                if device_id:
+                    full_participant_id = f"{participant_id}{device_id}"
+                else:
+                    full_participant_id = participant_id
+                gallery_path = str(Path(data_path) / f"{full_participant_id}_faces")
+                self.gallery_path_input.setText(gallery_path)
+                self.state.set_user_input(UserInputKey.GALLERY_PATH, gallery_path)
+                self.logger.info(f"Auto-generated gallery path: {gallery_path}")
+            else:
+                self.gallery_path_input.setText(
+                    "Participant info needed for auto-generation"
+                )
+                self.logger.debug(
+                    "Participant info not available for gallery path generation"
+                )
+
+        except Exception as e:
+            self.logger.error(f"Error auto-generating gallery path: {e}")
+            raise FlashTVError(
+                f"Failed to generate gallery path: {e}",
+                ErrorType.VALIDATION_ERROR,
+                recovery_action="Check participant setup completion",
+            )
+
+    @handle_step_error
+    def _create_gallery(self, checked: bool = False) -> None:
+        """Create a new face gallery using the gallery creation script."""
+        try:
+            participant_id = self.state.get_user_input(UserInputKey.PARTICIPANT_ID, "")
+            device_id = self.state.get_user_input(UserInputKey.DEVICE_ID, "")
+            data_path = self.state.get_user_input(UserInputKey.DATA_PATH, "")
+            username = self.state.get_user_input(UserInputKey.USERNAME, "")
+
+            if not all([participant_id, data_path, username]):
+                self.logger.error("Missing required information for gallery creation")
+                self.gallery_output.append(MESSAGES.Errors.ERROR_MISSING_GALLERY_INFO)
+                raise FlashTVError(
+                    "Missing participant ID, data path, or username",
+                    ErrorType.VALIDATION_ERROR,
+                    recovery_action="Complete participant setup first",
+                )
+
+            self.logger.info(
+                f"Starting gallery creation for participant: {participant_id}"
+            )
+            self.update_status(StepStatus.AUTOMATION_RUNNING)
+            self.create_gallery_button.setEnabled(False)
+            self.progress_bar.setVisible(True)
+            self.progress_bar.setValue(10)
+            self.progress_bar.setFormat("Starting gallery creation... %p%")
+
+            # Construct gallery path
+            if device_id:
+                full_participant_id = f"{participant_id}{device_id}"
+            else:
+                full_participant_id = participant_id
+            gallery_path = str(Path(data_path) / f"{full_participant_id}_faces")
+            self.gallery_path_input.setText(gallery_path)
+            self.state.set_user_input(UserInputKey.GALLERY_PATH, gallery_path)
+
+            # Persist state
+            if self.state_manager:
+                self.state_manager.save_state(self.state)
+
+            self.gallery_output.clear()
+            self.gallery_output.append("📋 Starting gallery creation...")
+            self.gallery_output.append(f"👤 Participant: {full_participant_id}")
+            self.gallery_output.append(f"📁 Gallery location: {gallery_path}")
+            self.gallery_output.append(f"💾 Data path: {data_path}")
+
+            # Run gallery creation script
+            script_path = (
+                f"/home/{username}/flash-tv-scripts/runtime_scripts/build_gallery.sh"
+            )
+
+            self.gallery_output.append("\n🚀 Launching gallery creation window...")
+
+            command = ["bash", script_path, full_participant_id, username, data_path]
+
+            process_info = self.process_runner.run_script(
+                command=command,
+                description=f"Creating face gallery for {full_participant_id}",
+                working_dir=os.path.expanduser("~/flash-tv-scripts/runtime_scripts"),
+                process_name="gallery_creation",
+            )
+
+            if process_info:
+                self.progress_bar.setValue(30)
+                self.progress_bar.setFormat("Loading face detection models... %p%")
+                self.gallery_output.append(
+                    "✅ Gallery creation script launched successfully"
+                )
+                self.gallery_output.append(
+                    "\n⏳ Loading face detection models (this may take 30-60 seconds)..."
+                )
+                self.gallery_output.append(
+                    "📊 See keyboard shortcuts in the right panel →"
+                )
+                self.logger.info("Gallery creation script started successfully")
+                # Monitor process completion in update_ui
+            else:
+                self.logger.error("Failed to start gallery creation script")
+                self.gallery_output.append(
+                    "❌ Failed to start gallery creation process"
+                )
+                self.gallery_output.append(
+                    "💡 Please check script permissions and try again"
+                )
+                self.update_status(StepStatus.FAILED)
+                self._reset_gallery_creation_ui()
+                raise FlashTVError(
+                    "Failed to start gallery creation script",
+                    ErrorType.PROCESS_ERROR,
+                    recovery_action="Check script permissions and try again",
+                )
+
+        except Exception as e:
+            self.logger.error(f"Error during gallery creation: {e}")
+            self.update_status(StepStatus.FAILED)
+            self._reset_gallery_creation_ui()
+            raise
+
+    @handle_step_error
+    def _fill_missing_extra_faces(self) -> None:
+        """Check if extra faces are missing and fill with poster faces if needed."""
+        try:
+            participant_id = self.state.get_user_input(UserInputKey.PARTICIPANT_ID, "")
+            device_id = self.state.get_user_input(UserInputKey.DEVICE_ID, "")
+            data_path = self.state.get_user_input(UserInputKey.DATA_PATH, "")
+            username = self.state.get_user_input(UserInputKey.USERNAME, "")
+
+            if not all([participant_id, device_id, data_path, username]):
+                self.logger.warning(
+                    "Missing required information for poster face filling"
+                )
+                return
+
+            # Get the faces folder path
+            combined_id = f"{participant_id}{device_id}"
+            faces_folder = os.path.join(data_path, f"{combined_id}_faces")
+
+            if not os.path.exists(faces_folder):
+                self.logger.warning(f"Faces folder does not exist: {faces_folder}")
+                return
+
+            # Count existing extra faces
+            import glob
+
+            extra_pattern = os.path.join(faces_folder, f"{combined_id}_extra*.png")
+            extra_faces = glob.glob(extra_pattern)
+            extra_count = len(extra_faces)
+
+            self.logger.info(f"Found {extra_count} extra faces in gallery")
+
+            # If we have fewer than 5 extra faces, copy poster faces
+            min_faces = 5
+            if extra_count < min_faces:
+                self.gallery_output.append(
+                    f"\n📋 Found only {extra_count} extra faces (need {min_faces})"
+                )
+                self.gallery_output.append(
+                    "🖼️  Filling missing extra faces with poster images..."
+                )
+
+                # Poster faces location
+                poster_faces_dir = f"/home/{username}/flash-tv-scripts/poster_faces"
+
+                if not os.path.exists(poster_faces_dir):
+                    self.logger.warning(
+                        f"Poster faces directory not found: {poster_faces_dir}"
+                    )
+                    self.gallery_output.append("⚠️  Poster faces directory not found")
+                    return
+
+                # Get poster face files
+                poster_files = sorted(
+                    glob.glob(os.path.join(poster_faces_dir, "*.png"))
+                )
+
+                if not poster_files:
+                    self.logger.warning("No poster face images found")
+                    self.gallery_output.append("⚠️  No poster face images found")
+                    return
+
+                # Copy poster faces to fill the gaps
+                import shutil
+
+                faces_copied = 0
+                for i in range(extra_count + 1, min_faces + 1):
+                    # Use modulo to cycle through poster faces
+                    poster_idx = (i - 1) % len(poster_files)
+                    source_file = poster_files[poster_idx]
+                    dest_file = os.path.join(
+                        faces_folder, f"{combined_id}_extra{i}.png"
+                    )
+
+                    shutil.copy2(source_file, dest_file)
+                    faces_copied += 1
+                    self.logger.info(f"Copied poster face {i}")
+
+                self.gallery_output.append(
+                    f"✅ Copied {faces_copied} poster faces to complete the gallery"
+                )
+            else:
+                self.logger.info("Extra faces complete - no poster faces needed")
+
+        except Exception as e:
+            self.logger.error(f"Error filling missing extra faces: {e}")
+            self.gallery_output.append(
+                f"⚠️  Warning: Could not fill missing extra faces: {e}"
+            )
+
+    def _validate_gallery(self, checked: bool = False) -> None:
+        """Validate the gallery structure and contents automatically."""
+        try:
+            gallery_path = self.state.get_user_input(UserInputKey.GALLERY_PATH, "")
+            if not gallery_path:
+                self.logger.warning("No gallery path available for validation")
+                return
+
+            self.logger.info(f"Validating gallery at path: {gallery_path}")
+            self.gallery_output.append("\n🔍 Validating gallery structure...")
+
+            gallery_dir = Path(gallery_path)
+
+            if not gallery_dir.exists():
+                self.logger.error(f"Gallery directory does not exist: {gallery_path}")
+                self.gallery_output.append("❌ Gallery directory does not exist")
+                self.gallery_output.append("💡 Please create the gallery first")
+                raise FlashTVError(
+                    f"Gallery directory does not exist: {gallery_path}",
+                    ErrorType.SYSTEM_ERROR,
+                    recovery_action="Create the gallery first",
+                )
+
+            # Check for required face categories
+            participant_id = self.state.get_user_input(UserInputKey.PARTICIPANT_ID, "")
+            device_id = self.state.get_user_input(UserInputKey.DEVICE_ID, "")
+            full_participant_id = (
+                f"{participant_id}{device_id}" if device_id else participant_id
+            )
+            required_faces = MESSAGES.Gallery.ROLES
+
+            validation_passed = True
+            total_images = 0
+
+            for face_type in required_faces:
+                face_files = list(
+                    gallery_dir.glob(f"{full_participant_id}_{face_type}*.png")
+                )
+
+                if face_files:
+                    count = len(face_files)
+                    total_images += count
+                    self.gallery_output.append(
+                        f"✅ Found {count} images for {face_type}"
+                    )
+                    self.logger.debug(f"Found {count} images for {face_type}")
+                else:
+                    self.gallery_output.append(f"❌ Missing images for {face_type}")
+                    self.logger.warning(f"Missing images for face type: {face_type}")
+                    validation_passed = False
+
+            if validation_passed:
+                self.logger.info(
+                    f"Gallery validation successful - {total_images} total images"
+                )
+                self.gallery_output.append("\n🎉 Gallery validation successful!")
+                self.gallery_output.append(f"📊 Total images found: {total_images}")
+                self.gallery_output.append("✨ Your face gallery is ready for use!")
+
+                # Save validation status
+                self.state.set_user_input(UserInputKey.GALLERY_VALIDATED, True)
+                self.state.set_user_input(
+                    UserInputKey.GALLERY_TOTAL_IMAGES, total_images
+                )
+
+                # Persist state
+                if self.state_manager:
+                    self.state_manager.save_state(self.state)
+
+                self.update_status(StepStatus.COMPLETED)
+                self.continue_button.setEnabled(True)
+            else:
+                self.logger.warning(
+                    "Gallery validation failed - missing required images"
+                )
+                self.gallery_output.append("\n❌ Gallery validation failed")
+                self.gallery_output.append(
+                    "💡 Please complete gallery creation for all categories"
+                )
+                self.update_status(StepStatus.USER_ACTION_REQUIRED)
+
+        except Exception as e:
+            self.logger.error(f"Error during gallery validation: {e}")
+            self.update_status(StepStatus.FAILED)
+            raise
+
+    @handle_step_error
+    def _on_continue_clicked(self, checked: bool = False) -> None:
+        """Handle continue button click with validation."""
+        try:
+            if self.is_completed() and self.continue_button.isEnabled():
+                gallery_path = self.state.get_user_input(UserInputKey.GALLERY_PATH, "")
+                total_images = self.state.get_user_input(
+                    UserInputKey.GALLERY_TOTAL_IMAGES, 0
+                )
+
+                self.logger.info(
+                    f"Gallery creation completed with {total_images} images at: {gallery_path}"
+                )
+
+                # Final state persistence
+                if self.state_manager:
+                    self.state_manager.save_state(self.state)
+
+                self.request_next_step.emit()
+            else:
+                self.logger.warning("Continue clicked but gallery not validated")
+
+        except Exception as e:
+            self.logger.error(f"Error during continue action: {e}")
+            raise FlashTVError(
+                f"Failed to complete gallery step: {e}",
+                ErrorType.PROCESS_ERROR,
+                recovery_action="Validate the gallery first",
+            )
+
+    def _reset_gallery_creation_ui(self) -> None:
+        """Reset the gallery creation UI after process completion."""
+        try:
+            self.create_gallery_button.setEnabled(True)
+            self.progress_bar.setVisible(False)
+            self.progress_bar.setValue(0)
+            self.logger.debug("Reset gallery creation UI")
+
+        except Exception as e:
+            self.logger.error(f"Error resetting gallery UI: {e}")
+
+    @handle_step_error
+    def activate_step(self) -> None:
+        """Activate the gallery creation step with state restoration."""
+        super().activate_step()
+
+        self.logger.info("Gallery creation step activated")
+
+        # Clear previous output to avoid duplicates when re-activating step
+        self.gallery_output.clear()
+
+        # Auto-generate gallery path from participant info
+        self._load_existing_gallery_path()
+
+        # Check if already validated
+        if self.state.get_user_input(UserInputKey.GALLERY_VALIDATED, False):
+            gallery_path = self.state.get_user_input(UserInputKey.GALLERY_PATH, "")
+            total_images = self.state.get_user_input(
+                UserInputKey.GALLERY_TOTAL_IMAGES, 0
+            )
+            if gallery_path:
+                self.gallery_output.append(
+                    f"✅ Gallery already validated: {total_images} images"
+                )
+                self.continue_button.setEnabled(True)
+                self.update_status(StepStatus.COMPLETED)
+                self.logger.info("Gallery already validated, skipping")
+                return
+
+        # Check if gallery path is already set and validate it
+        gallery_path = self.state.get_user_input(UserInputKey.GALLERY_PATH, "")
+        if gallery_path and Path(gallery_path).exists():
+            self.gallery_output.append("📁 Found existing gallery")
+            self._validate_gallery()
+        else:
+            self.gallery_output.append("📋 Ready to create face gallery")
+            self.gallery_output.append("👆 Click button above to begin")
+
+    def update_ui(self) -> None:
+        """Update UI elements periodically with framework integration."""
+        super().update_ui()
+
+        # Check gallery creation process status
+        process_info = self.state.get_process("gallery_creation")
+        if process_info:
+            # Update progress bar based on stderr output (model loading)
+            stdout_lines, stderr_lines = process_info.get_output()
+
+            # Track model loading progress
+            if stderr_lines:
+                model_load_keywords = [
+                    "Loading weights",
+                    "conv",
+                    "detection",
+                    "src/nnvm",
+                    "MXNET_CUDNN",
+                    "Initializing",
+                    "cudnn",
+                ]
+                model_lines = [
+                    line
+                    for line in stderr_lines
+                    if any(keyword in line for keyword in model_load_keywords)
+                ]
+
+                if model_lines:
+                    # Estimate progress based on model loading stages
+                    # Check in reverse order (most recent progress)
+                    if any("cudnn" in line.lower() for line in model_lines[-20:]):
+                        self.progress_bar.setValue(100)
+                        self.progress_bar.setFormat("Models loaded - Window ready! %p%")
+                    elif any("MXNET_CUDNN" in line for line in model_lines[-20:]):
+                        self.progress_bar.setValue(90)
+                        self.progress_bar.setFormat(
+                            "Optimizing model performance... %p%"
+                        )
+                    elif any("src/nnvm" in line for line in model_lines[-20:]):
+                        self.progress_bar.setValue(70)
+                        self.progress_bar.setFormat(
+                            "Loading face verification model... %p%"
+                        )
+                    elif any("Loading weights" in line for line in model_lines):
+                        self.progress_bar.setValue(50)
+                        self.progress_bar.setFormat(
+                            "Loading face detection weights... %p%"
+                        )
+                    elif any("Initializing" in line for line in model_lines):
+                        self.progress_bar.setValue(30)
+                        self.progress_bar.setFormat("Initializing models... %p%")
+
+            if not process_info.is_running():
+                status = process_info.get_status()
+                if status == ProcessStatus.COMPLETED:
+                    self.logger.info("Gallery creation script completed")
+                    self.progress_bar.setValue(100)
+                    self.progress_bar.setFormat("Gallery creation completed! %p%")
+                    self.gallery_output.append("\n✅ Gallery creation window closed")
+
+                    # Check and fill missing extra faces with poster faces
+                    self._fill_missing_extra_faces()
+
+                    self.gallery_output.append("\n🔍 Starting automatic validation...")
+
+                    # Automatically validate the gallery
+                    self._validate_gallery()
+                    self.update_status(StepStatus.USER_ACTION_REQUIRED)
+                elif status == ProcessStatus.FAILED:
+                    self.logger.error("Gallery creation failed")
+                    self.progress_bar.setFormat("Gallery creation failed")
+                    self.gallery_output.append("\n❌ Gallery creation failed")
+
+                    # Get and show error output
+                    stdout_lines, stderr_lines = process_info.get_output()
+                    if stderr_lines:
+                        self.gallery_output.append("\nError output:")
+                        for line in stderr_lines[-10:]:
+                            self.gallery_output.append(f"  {line}")
+
+                    self.gallery_output.append(
+                        "💡 Please check the error messages and try again"
+                    )
+                    self.update_status(StepStatus.FAILED)
+                elif status == ProcessStatus.TERMINATED:
+                    self.logger.warning("Gallery creation was terminated")
+                    self.progress_bar.setFormat("Gallery creation terminated")
+                    self.gallery_output.append("\n⚠️ Gallery creation was terminated")
+                    self.gallery_output.append(
+                        "💡 You can restart the process if needed"
+                    )
+                    self.update_status(StepStatus.FAILED)
+                else:
+                    self.logger.error(
+                        "Gallery creation finished with unexpected status"
+                    )
+                    self.gallery_output.append(f"\n⚠️ Unexpected status: {status}")
+                    self.update_status(StepStatus.FAILED)
+
+                self._reset_gallery_creation_ui()
+                # Remove completed process
+                self.state.remove_process("gallery_creation")
+
+    def _cleanup_step_resources(self) -> None:
+        """Clean up step-specific resources."""
+        try:
+            # Final state save before cleanup
+            if self.state_manager:
+                self.state_manager.save_state(self.state)
+
+            self.logger.info("Gallery creation step cleanup completed")
+
+        except Exception as e:
+            self.logger.error(f"Error during step cleanup: {e}")

@@ -1,0 +1,14 @@
+# TEMPLATE - Do not use directly
+# Run install_desktop_shortcut.sh to generate the actual .desktop file
+# with the correct Python path for your system
+
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=FLASH-TV Setup
+Comment=FLASH-TV System Setup Wizard
+Exec=PYTHON_PATH_PLACEHOLDER GUI_PATH_PLACEHOLDER/main.py
+Icon=utilities-system-monitor
+Terminal=false
+Categories=Utility;System;
+StartupNotify=true
